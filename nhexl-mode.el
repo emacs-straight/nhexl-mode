@@ -4,7 +4,7 @@
 
 ;; Author: Stefan Monnier <monnier@iro.umontreal.ca>
 ;; Keywords: data
-;; Version: 0.9
+;; Version: 1.0
 ;; Package-Requires: ((emacs "24.4") (cl-lib "0.5"))
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -40,6 +40,9 @@
 ;; - `nhexl-overwrite-only-mode': a minor mode to try and avoid moving text.
 ;;   In this minor mode, not only self-inserting keys overwrite existing
 ;;   text, but commands like `yank' and `kill-region' as well.
+;;
+;; - it overrides C-u to use hexadecimal, so you can do C-u a 4 C-f
+;;   to advance by #xa4 characters.
 
 ;; Even though the hex addresses displayed by this mode aren't actually
 ;; part of the buffer's text (contrary to hexl-mode, for example), you can
@@ -835,6 +838,73 @@ existing text, if needed with `nhexl-overwrite-clear-byte'."
           (setq pow2bytes (+ pow2bytes (/ pow2bytes 2))))
         (unless (eql pow2bytes nhexl-line-width)
           (setq-local nhexl-line-width pow2bytes))))))
+
+;;;;; The main prefix command.
+
+(defvar nhexl-universal-argument-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map universal-argument-map)
+    (define-key map [?\C-u] 'universal-argument-more)
+    (define-key map [remap digit-argument] 'nhexl-digit-argument)
+    (dolist (k '("a" "b" "c" "d" "e" "f"))
+      (define-key map k 'nhexl-digit-argument))
+    map)
+  "Keymap used while processing nhexl-mode's \\[universal-argument].")
+
+;; FIXME: Using advice is ugly!
+
+;; Instead of an advice, we'd prefer to replace universal-argument--description
+;; on prefix-command-echo-keystrokes-functions, but there's no mechanism to
+;; do that.
+(advice-add 'universal-argument--description :around
+            #'nhexl--universal-argument-description)
+(defun nhexl--universal-argument-description (orig-fun &rest args)
+  (cond
+   ((not nhexl-mode) (apply orig-fun args))
+   ((null prefix-arg) nil)
+   (t
+    (concat "C-u"
+            (pcase prefix-arg
+              (`(-) " -")
+              (`(,(and (pred integerp) n))
+               (let ((str ""))
+                 (while (and (> n 4) (= (mod n 4) 0))
+                   (setq str (concat str " C-u"))
+                   (setq n (/ n 4)))
+                 (if (= n 4) str (format " %s" prefix-arg))))
+              ((pred integerp) (format " #x%X" prefix-arg))
+              (_ (format " %s" prefix-arg)))))))
+
+(advice-add 'universal-argument--mode :around
+            #'nhexl--universal-argument-mode)
+(defun nhexl--universal-argument-mode (orig-fun &rest args)
+  (if (not nhexl-mode)
+      (apply orig-fun args)
+    (let ((universal-argument-map nhexl-universal-argument-map))
+      (apply orig-fun args))))
+
+(defun nhexl-digit-argument (arg)
+  "Part of the hexadecimal numeric argument for the next command.
+\\[universal-argument] following digits or minus sign ends the argument."
+  (interactive "P")
+  (prefix-command-preserve-state)
+  (let* ((keys (this-command-keys))
+         (key (aref keys (1- (length keys))))
+         (char (if (integerp key) (logand key #x7f)))
+	 (digit (cond
+                 ((<= ?a char ?f) (+ 10 (- char ?a)))
+                 ((<= ?A char ?F) (+ 10 (- char ?A)))
+                 ((<= ?0 char ?9) (- char ?0)))))
+    (setq prefix-arg (cond ((integerp arg)
+                            (+ (* arg 16)
+			       (if (< arg 0) (- digit) digit)))
+                           ((eq arg '-)
+                            ;; Treat -0 as just -, so that -01 will work.
+                            (if (zerop digit) '- (- digit)))
+                           (t
+                            digit))))
+  (universal-argument--mode))
+
 
 (provide 'nhexl-mode)
 ;;; nhexl-mode.el ends here
