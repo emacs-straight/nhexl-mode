@@ -4,7 +4,7 @@
 
 ;; Author: Stefan Monnier <monnier@iro.umontreal.ca>
 ;; Keywords: data
-;; Version: 1.0
+;; Version: 1.1
 ;; Package-Requires: ((emacs "24.4") (cl-lib "0.5"))
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -44,9 +44,10 @@
 ;; - it overrides C-u to use hexadecimal, so you can do C-u a 4 C-f
 ;;   to advance by #xa4 characters.
 
-;; Even though the hex addresses displayed by this mode aren't actually
-;; part of the buffer's text (contrary to hexl-mode, for example), you can
-;; search them with Isearch.
+;; Even though the hex addresses and hex data displayed by this mode aren't
+;; actually part of the buffer's text (contrary to hexl-mode, for example,
+;; they're only added to the display), you can search them with Isearch,
+;; according to nhexl-isearch-hex-addresses and nhexl-isearch-hex-bytes.
 
 ;;;; Known bugs:
 ;;
@@ -87,6 +88,18 @@ Otherwise they are applied unconditionally."
 
 (defcustom nhexl-silently-convert-to-unibyte nil
   "If non-nil `nhexl-mode' won't ask before converting the buffer to unibyte."
+  :type 'boolean)
+
+(defcustom nhexl-isearch-hex-addresses t
+  "If non-nil, hex search terms will look for matching addresses."
+  :type 'boolean)
+
+(defcustom nhexl-isearch-hex-bytes t
+  "If non-nil, hex search terms will look for matching bytes."
+  :type 'boolean)
+
+(defcustom nhexl-isearch-hex-highlight t
+  "If non-nil, nhexl will highlight Isearch matches in the hex areas as well."
   :type 'boolean)
 
 (defvar nhexl--display-table
@@ -611,10 +624,16 @@ Return the corresponding nibble, if applicable."
              (eval-when-compile (propertize " " 'display '(space :align-to 12)))
              (mapconcat (lambda (c)
                           (setq i (1+ i))
-                          ;; FIXME: In multibyte buffers,
-                          ;; do something clever about
-                          ;; non-ascii chars.
-                          (let ((s (format "%02x" c)))
+                          ;; FIXME: In multibyte buffers, do something clever
+                          ;; about non-ascii chars.
+                          (let ((s (format "%02x" c))
+                                face)
+                            (when (and isearch-mode
+                                       (memq (setq face (get-char-property
+                                                         (+ i from) 'face))
+                                             '(lazy-highlight isearch)))
+                              (put-text-property 0 (length s) 'face
+                                                 `(,face default) s))
                             (when (and point (eq point (+ from i)))
                               (if nhexl-nibble-edit-mode
                                   (let ((nib (min (nhexl--nibble point)
@@ -626,6 +645,9 @@ Return the corresponding nibble, if applicable."
                                                    'face '(highlight default)
                                                    s)))
                             (if (zerop (mod i 2))
+                                ;; FIXME: If this char and the next are both
+                                ;; covered by isearch highlight, we should
+                                ;; also highlight the space.
                                 s (concat s " "))))
                         bufstr
                         "")
@@ -775,61 +797,129 @@ Return the corresponding nibble, if applicable."
               (truncate (- oldpoint zero) lw))
           (nhexl--refresh-cursor oldpoint)))))
 
+(defun nhexl--isearch-match-hex-bytes (string bound noerror)
+  ;; "57a" can be taken as "57a." or ".57a", but we currently
+  ;; only handle "57a."
+  ;; TODO: Maybe we could support hex regexps as well?
+  (let ((i 0)
+        (chars ()))
+    (while (< (1+ i) (length string))
+      (push (string-to-number (substring string i (+ i 2)) 16)
+            chars)
+      (setq i (+ i 2)))
+    (let* ((base (regexp-quote (apply #'string (nreverse chars))))
+           (newstr
+            (if (>= i (length string))
+                base
+              (cl-assert (= (1+ i) (length string)))
+              (let ((nibble (string-to-number (substring string i) 16)))
+                ;; FIXME: if one of the two bounds is a special char
+                ;; like `]` or `^' we can get into trouble!
+                (format "%s[%c-%c]" base
+                        (* 16 nibble)
+                        (+ 15 (* 16 nibble)))))))
+      (let ((case-fold-search nil))
+        (funcall (if isearch-forward
+                     #'re-search-forward
+                   #'re-search-backward)
+                 newstr bound noerror)))))
+
 (defun nhexl--isearch-search-fun (orig-fun)
   (let ((def-fun (funcall orig-fun)))
     (lambda (string bound noerror)
+      (unless bound
+        (setq bound (if isearch-forward (point-max) (point-min))))
       (let ((startpos (point))
             (def (funcall def-fun string bound noerror)))
-        (setq bound
-              ;; Don't search further than what `def-fun' found.
-              (if def (match-beginning 0)
-                (if isearch-forward (point-max) (point-min))))
-        (cond
-         ((string-match-p "\\`[[:xdigit:]]+:?\\'" string)
+        ;; Don't search further than what `def-fun' found.
+        (if def (setq bound (match-beginning 0)))
+        (when (and nhexl-isearch-hex-bytes
+                   (> (length string) 1)
+                   (string-match-p "\\`[[:xdigit:]]+\\'" string))
+          ;; Could be a search pattern specified in hex.
+          (goto-char startpos)
+          (let ((newdef (nhexl--isearch-match-hex-bytes string bound noerror)))
+            (when newdef
+              (setq def newdef)
+              (setq bound (match-beginning 0)))))
+        (when (and nhexl-isearch-hex-addresses
+                   (> (length string) 1)
+                   (string-match-p "\\`[[:xdigit:]]+:?\\'" string))
           ;; Could be a hexadecimal address.
-          ;; FIXME: The code below works well to find the address, but the
-          ;; resulting isearch-highlighting is wrong (the char at that position
-          ;; is highlighted, instead of the actual address matched in the
-          ;; before-string).
-          (let* ((addr (string-to-number string 16))
-                 ;; If `string' says "7a:", then it's "anchored", meaning that
-                 ;; we'll only look for nearest address of the form "XXX7a"
-                 ;; whereas if `string' says just "7a", then we look for nearest
-                 ;; address of the form "XXX7a", or "XXX7aX", or "XXX7aXX", ...
-                 (anchored (eq ?: (aref string (1- (length string)))))
-                 (mod (lsh 1 (* 4 (- (length string) (if anchored 1 0)))))
-                 (base (save-restriction (widen) (point-min)))
-                 (bestnext nil)
-                 (maxaddr (- (max startpos bound) base)))
-            (while (< addr maxaddr)
-              (let ((next (+ addr base (* (/ (- startpos base) mod) mod))))
-                (if isearch-forward
-                    (progn
-                      (when (<= next startpos)
-                        (setq next (+ next mod)))
-                      (cl-assert (> next startpos))
-                      (and (< next bound)
-                           (or (null bestnext) (< next bestnext))
-                           (setq bestnext next)))
-                  (when (>= next startpos)
-                    (setq next (- next mod)))
-                  (cl-assert (< next startpos))
-                  (and (> next bound)
-                       (or (null bestnext) (> next bestnext))
-                       (setq bestnext next))))
-              (let ((nextmod (* mod 16)))
-                (if (or anchored
-                        ;; Overflow!  let's get out of the loop right away.
-                        (< nextmod mod))
-                    (setq maxaddr -1)
-                  (setq addr (* addr 16))
-                  (setq mod nextmod))))
-            (cond
-             ((null bestnext) def)
-             (isearch-forward
-              (goto-char bestnext) (re-search-forward "."))
-             (t (goto-char (1+ bestnext)) (re-search-backward ".")))))
-         (t def))))))
+          (goto-char startpos)
+          (let ((newdef (nhexl--isearch-match-hex-address string bound noerror)))
+            (when newdef
+              (setq def newdef)
+              (setq bound (match-beginning 0)))))
+        (when def
+          (goto-char def)
+          def)))))
+
+(defun nhexl--isearch-match-hex-address (string bound _noerror)
+  ;; FIXME: The code below works well to find the address, but the
+  ;; resulting isearch-highlighting is wrong (the char(s) at that position
+  ;; is highlighted, instead of the actual address matched in the
+  ;; before-string).
+  (let* ((addr (string-to-number string 16))
+         ;; If `string' says "7a:", then it's "anchored", meaning that
+         ;; we'll only look for nearest address of the form "XXX7a"
+         ;; whereas if `string' says just "7a", then we look for nearest
+         ;; address of the form "XXX7a", or "XXX7aX", or "XXX7aXX", ...
+         (anchored (eq ?: (aref string (1- (length string)))))
+         (mod (lsh 1 (* 4 (- (length string) (if anchored 1 0)))))
+         (base (save-restriction (widen) (point-min)))
+         (bestnext nil)
+         (maxaddr (- (max (point) bound) base)))
+    (while (< addr maxaddr)
+      (let ((next (+ addr base (* (/ (- (point) base) mod) mod))))
+        (if isearch-forward
+            (progn
+              (when (<= next (point))
+                (setq next (+ next mod)))
+              (cl-assert (> next (point)))
+              (and (< next bound)
+                   (or (null bestnext) (< next bestnext))
+                   (setq bestnext next)))
+          (when (>= next (point))
+            (setq next (- next mod)))
+          (cl-assert (< next (point)))
+          (and (> next bound)
+               (or (null bestnext) (> next bestnext))
+               (setq bestnext next))))
+      (let ((nextmod (* mod 16)))
+        (if (or anchored
+                ;; Overflow!  let's get out of the loop right away.
+                (< nextmod mod))
+            (setq maxaddr -1)
+          (setq addr (* addr 16))
+          (setq mod nextmod))))
+    (when bestnext
+      (let* ((lw (nhexl--line-width))
+             (me (+ (* lw (/ (- bestnext (point-min)) lw))
+                    (point-min) lw)))
+        (set-match-data (list bestnext me))
+        (if isearch-forward
+            ;; Go to just before the last char on the line,
+            ;; otherwise, the cursor ends up on the
+            ;; next line!
+            (1- me)
+          bestnext)))))
+
+(advice-add 'lazy-highlight-cleanup :before
+            #'nhexl--isearch-highlight-cleanup)
+(defun nhexl--isearch-highlight-cleanup (&rest _)
+  (when (and nhexl-mode nhexl-isearch-hex-highlight)
+    (dolist (ol isearch-lazy-highlight-overlays)
+      (when (and (overlayp ol) (eq (overlay-buffer ol) (current-buffer)))
+        (put-text-property (overlay-start ol) (overlay-end ol)
+                           'fontified nil)))))
+
+(advice-add 'isearch-lazy-highlight-match :after
+            #'nhexl--isearch-highlight-match)
+(defun nhexl--isearch-highlight-match (&optional mb me)
+  (when (and nhexl-mode nhexl-isearch-hex-highlight
+             (integerp mb) (integerp me))
+    (put-text-property mb me 'fontified nil)))
 
 (defun nhexl--line-width-watcher (_sym _newval op where)
   (when (eq op 'set)
