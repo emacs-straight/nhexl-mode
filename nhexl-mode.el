@@ -4,7 +4,7 @@
 
 ;; Author: Stefan Monnier <monnier@iro.umontreal.ca>
 ;; Keywords: data
-;; Version: 1.1
+;; Version: 1.2
 ;; Package-Requires: ((emacs "24.4") (cl-lib "0.5"))
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -807,32 +807,58 @@ Return the corresponding nibble, if applicable."
       (push (string-to-number (substring string i (+ i 2)) 16)
             chars)
       (setq i (+ i 2)))
-    (let* ((base (regexp-quote (apply #'string (nreverse chars))))
-           (newstr
-            (if (>= i (length string))
-                base
-              (cl-assert (= (1+ i) (length string)))
-              (let ((nibble (string-to-number (substring string i) 16)))
-                ;; FIXME: if one of the two bounds is a special char
-                ;; like `]` or `^' we can get into trouble!
-                (format "%s[%c-%c]" base
-                        (* 16 nibble)
-                        (+ 15 (* 16 nibble)))))))
+    (let* ((base (regexp-quote (apply #'unibyte-string (nreverse chars))))
+           (re
+            (concat (if (>= i (length string))
+                        base
+                      (cl-assert (= (1+ i) (length string)))
+                      (let ((nibble (string-to-number (substring string i) 16)))
+                        ;; FIXME: if one of the two bounds is a special char
+                        ;; like `]` or `^' we can get into trouble!
+                        (concat base
+                                (unibyte-string ?\[ (* 16 nibble) ?-
+                                                   (+ 15 (* 16 nibble)) ?\]))))
+                    ;; We also search for the literal hex string here, so the
+                    ;; search stops as soon as one is found, otherwise we too
+                    ;; easily fall into the trap of bug#33708 where at every
+                    ;; cycle we first search unsuccessfully through the whole
+                    ;; buffer with one kind of search before trying the
+                    ;; other search.
+                    ;; Don't bother regexp-quoting the string since we know
+                    ;; it's only made of hex chars!
+                    "\\|" string)))
       (let ((case-fold-search nil))
         (funcall (if isearch-forward
                      #'re-search-forward
                    #'re-search-backward)
-                 newstr bound noerror)))))
+                 re bound noerror)))))
 
 (defun nhexl--isearch-search-fun (orig-fun)
   (let ((def-fun (funcall orig-fun)))
     (lambda (string bound noerror)
       (unless bound
         (setq bound (if isearch-forward (point-max) (point-min))))
+      ;; The order we used for the different searches is important:
+      ;; - First we do the hex-address search since it's always fast even in
+      ;;   very large buffers.
+      ;; - Then we do the hex-bytes search.
+      ;; - Only last we fallback to the def-fun: if the user wants to
+      ;;   do an hex-bytes search, the def-fun will likely fail but not
+      ;;   without first scanning the whole buffer which can take a while,
+      ;;   as in bug#33708.
       (let ((startpos (point))
-            (def (funcall def-fun string bound noerror)))
-        ;; Don't search further than what `def-fun' found.
-        (if def (setq bound (match-beginning 0)))
+            def)
+        ;; Hex address search.
+        (when (and nhexl-isearch-hex-addresses
+                   (> (length string) 1)
+                   (string-match-p "\\`[[:xdigit:]]+:?\\'" string))
+          ;; Could be a hexadecimal address.
+          (goto-char startpos)
+          (let ((newdef (nhexl--isearch-match-hex-address string bound noerror)))
+            (when newdef
+              (setq def newdef)
+              (setq bound (match-beginning 0)))))
+        ;; Hex bytes search
         (when (and nhexl-isearch-hex-bytes
                    (> (length string) 1)
                    (string-match-p "\\`[[:xdigit:]]+\\'" string))
@@ -842,12 +868,10 @@ Return the corresponding nibble, if applicable."
             (when newdef
               (setq def newdef)
               (setq bound (match-beginning 0)))))
-        (when (and nhexl-isearch-hex-addresses
-                   (> (length string) 1)
-                   (string-match-p "\\`[[:xdigit:]]+:?\\'" string))
-          ;; Could be a hexadecimal address.
+        ;; Normal search.
+        (progn
           (goto-char startpos)
-          (let ((newdef (nhexl--isearch-match-hex-address string bound noerror)))
+          (let ((newdef (funcall def-fun string bound noerror)))
             (when newdef
               (setq def newdef)
               (setq bound (match-beginning 0)))))
@@ -909,17 +933,19 @@ Return the corresponding nibble, if applicable."
             #'nhexl--isearch-highlight-cleanup)
 (defun nhexl--isearch-highlight-cleanup (&rest _)
   (when (and nhexl-mode nhexl-isearch-hex-highlight)
-    (dolist (ol isearch-lazy-highlight-overlays)
-      (when (and (overlayp ol) (eq (overlay-buffer ol) (current-buffer)))
-        (put-text-property (overlay-start ol) (overlay-end ol)
-                           'fontified nil)))))
+    (with-silent-modifications
+      (dolist (ol isearch-lazy-highlight-overlays)
+        (when (and (overlayp ol) (eq (overlay-buffer ol) (current-buffer)))
+          (put-text-property (overlay-start ol) (overlay-end ol)
+                             'fontified nil))))))
 
 (advice-add 'isearch-lazy-highlight-match :after
             #'nhexl--isearch-highlight-match)
 (defun nhexl--isearch-highlight-match (&optional mb me)
   (when (and nhexl-mode nhexl-isearch-hex-highlight
              (integerp mb) (integerp me))
-    (put-text-property mb me 'fontified nil)))
+    (with-silent-modifications
+      (put-text-property mb me 'fontified nil))))
 
 (defun nhexl--line-width-watcher (_sym _newval op where)
   (when (eq op 'set)
