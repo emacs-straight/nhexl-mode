@@ -1,10 +1,10 @@
 ;;; nhexl-mode.el --- Minor mode to edit files via hex-dump format  -*- lexical-binding: t -*-
 
-;; Copyright (C) 2010, 2012, 2016, 2018  Free Software Foundation, Inc.
+;; Copyright (C) 2010-2019  Free Software Foundation, Inc.
 
 ;; Author: Stefan Monnier <monnier@iro.umontreal.ca>
 ;; Keywords: data
-;; Version: 1.2
+;; Version: 1.3
 ;; Package-Requires: ((emacs "24.4") (cl-lib "0.5"))
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -18,7 +18,7 @@
 ;; GNU General Public License for more details.
 
 ;; You should have received a copy of the GNU General Public License
-;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 ;;; Commentary:
 
@@ -34,8 +34,7 @@
 ;;
 ;; - `nhexl-nibble-edit-mode': a "nibble editor" minor mode.
 ;;   where the cursor pretends to advance by nibbles (4-bit) and the
-;;   self-insertion keys (which only work for hex-digits) will only modify the
-;;   nibble under point.
+;;   self-insertion keys let you edit the hex digits directly.
 ;;
 ;; - `nhexl-overwrite-only-mode': a minor mode to try and avoid moving text.
 ;;   In this minor mode, not only self-inserting keys overwrite existing
@@ -62,6 +61,12 @@
 ;;     with a `window' property (for all N other windows that don't have
 ;;     their cursor on this line).
 ;;   FWIW, the original `hexl-mode' has the same kind of problem.
+
+;;;; Wishlist:
+
+;; - An equivalent to hexl-mode's `hexl-bits'.
+;; - Always reload the file with find-file-literally instead
+;;   of editing the multibyte representation?
 
 ;;; Code:
 
@@ -122,7 +127,7 @@ Otherwise they are applied unconditionally."
 ;;   rather than only the ascii area!
 ;; FIXME: Isearch in this minor mode should try and "search in the hex area".
 ;; FIXME: Kill&yank in this minor mode should work on the hex representation
-;;   of the buffer's content!
+;;   of the buffer's content (and should obey overwrite-mode)!
 
 (defvar nhexl-nibble-edit-mode-map
   (let ((map (make-sparse-keymap)))
@@ -133,6 +138,10 @@ Otherwise they are applied unconditionally."
     (define-key map [remap backward-char] #'nhexl-nibble-backward)
     map))
 
+;; FIXME: Reuben Thomas pointed out that the user may not think of it as
+;; "editing nibbles" but "editing the hex codes" instead.
+;; Maybe we should rename `nhexl-nibble-edit-mode'?
+(defalias 'nhexl-hex-edit-mode #'nhexl-nibble-edit-mode)
 (define-minor-mode nhexl-nibble-edit-mode
   "Minor mode to edit the hex nibbles in `nhexl-mode'."
   :global nil
@@ -209,14 +218,16 @@ and TICKS is the `buffer-chars-modified-tick' for which this was valid.")
   (interactive)
   (let* ((max (nhexl--nibble-max))
          (nib (min max (nhexl--nibble)))
-         (char (following-char))
+         (char (if (and (not overwrite-mode) (= nib 0)) 0 (following-char)))
          (hex (format "%02x" char))
          (nhex (concat (substring hex 0 nib)
                        (string last-command-event)
                        (substring hex (1+ nib))))
          (nchar (string-to-number nhex 16)))
     (insert nchar)
-    (unless (eobp) (delete-char 1))
+    (unless (or (eobp)
+                (and (not overwrite-mode) (= nib 0)))
+      (delete-char 1))
     (if (= max nib) nil
       (backward-char 1)
       (nhexl--nibble-set (1+ nib)))))
@@ -343,6 +354,10 @@ existing text, if needed with `nhexl-overwrite-clear-byte'."
     (define-key map [remap mouse-set-point] #'nhexl-mouse-set-point)
     (define-key map [remap mouse-drag-region] #'nhexl-mouse-drag-region)
     (define-key map [remap mouse-set-region] #'nhexl-mouse-set-region)
+    ;; FIXME: Should we really make it hard to use non-binary `overwrite-mode'?
+    ;; Or should we go even further and remap it to
+    ;; `nhexl-overwrite-only-mode'?
+    (define-key map [remap overwrite-mode] #'binary-overwrite-mode)
     ;; FIXME: Find a key binding for nhexl-nibble-edit-mode!
     map))
 
