@@ -4,7 +4,7 @@
 
 ;; Author: Stefan Monnier <monnier@iro.umontreal.ca>
 ;; Keywords: data
-;; Version: 1.3
+;; Version: 1.4
 ;; Package-Requires: ((emacs "24.4") (cl-lib "0.5"))
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -107,6 +107,17 @@ Otherwise they are applied unconditionally."
   "If non-nil, nhexl will highlight Isearch matches in the hex areas as well."
   :type 'boolean)
 
+(defcustom nhexl-group-size (max 1 (/ hexl-bits 8))
+  "Number of bytes in each group.
+Groups are separated by spaces."
+  :type 'integer)
+
+(defcustom nhexl-separate-line nil
+  ;; FIXME: This var is not taken into account when auto-sizing the
+  ;; line-width!
+  "If non-nil, put the ascii area below the hex, on a separate line."
+  :type 'boolean)
+
 (defvar nhexl--display-table
   (let ((dt (make-display-table)))
     (unless nhexl-display-unprintables
@@ -125,7 +136,6 @@ Otherwise they are applied unconditionally."
 
 ;; FIXME: Region highlighting in this minor mode should highlight the hex area
 ;;   rather than only the ascii area!
-;; FIXME: Isearch in this minor mode should try and "search in the hex area".
 ;; FIXME: Kill&yank in this minor mode should work on the hex representation
 ;;   of the buffer's content (and should obey overwrite-mode)!
 
@@ -376,9 +386,11 @@ existing text, if needed with `nhexl-overwrite-clear-byte'."
         (jit-lock-unregister #'nhexl--jit)
         (remove-hook 'after-change-functions #'nhexl--change-function 'local)
         (remove-hook 'post-command-hook #'nhexl--post-command 'local)
-        (remove-hook 'window-configuration-change-hook
-                    #'nhexl--window-config-change t)
-        (remove-hook 'window-size-change-functions #'nhexl--window-size-change)
+        (if (>= emacs-major-version 27)
+            (remove-hook 'window-size-change-functions #'nhexl--window-size-change t)
+          (remove-hook 'window-configuration-change-hook
+                       #'nhexl--window-config-change t)
+          (remove-hook 'window-size-change-functions #'nhexl--window-size-change))
         (remove-function (local 'isearch-search-fun-function)
                          #'nhexl--isearch-search-fun)
         ;; FIXME: This conflicts with any other use of `display'.
@@ -416,9 +428,11 @@ existing text, if needed with `nhexl-overwrite-clear-byte'."
     (add-hook 'change-major-mode-hook (lambda () (nhexl-mode -1)) nil 'local)
     (add-hook 'post-command-hook #'nhexl--post-command nil 'local)
     (add-hook 'after-change-functions #'nhexl--change-function nil 'local)
-    (add-hook 'window-configuration-change-hook
-              #'nhexl--window-config-change nil 'local)
-    (add-hook 'window-size-change-functions #'nhexl--window-size-change)
+    (if (>= emacs-major-version 27)
+        (add-hook 'window-size-change-functions #'nhexl--window-size-change nil t)
+      (add-hook 'window-configuration-change-hook
+                #'nhexl--window-config-change nil 'local)
+      (add-hook 'window-size-change-functions #'nhexl--window-size-change))
     (add-function :around (local 'isearch-search-fun-function)
                   #'nhexl--isearch-search-fun)
     ;; FIXME: We should delay this to after running the minor-mode hook.
@@ -659,7 +673,7 @@ Return the corresponding nibble, if applicable."
                                 (put-text-property 0 (length s)
                                                    'face '(highlight default)
                                                    s)))
-                            (if (zerop (mod i 2))
+                            (if (not (zerop (mod (1+ i) nhexl-group-size)))
                                 ;; FIXME: If this char and the next are both
                                 ;; covered by isearch highlight, we should
                                 ;; also highlight the space.
@@ -667,13 +681,18 @@ Return the corresponding nibble, if applicable."
                         bufstr
                         "")
              (if (> next nextpos)
-                 (make-string (+ (/ (1+ (- next nextpos)) 2)
+                 (make-string (+ (/ (1+ (- next nextpos)) nhexl-group-size)
                                  (* (- next nextpos) 2))
                               ?\s))
-             (propertize "  " 'display
-                         `(space :align-to
-                                 ,(+ (/ (* lw 5) 2)
-                                     12 3))))))
+             (if nhexl-separate-line
+                 (concat "\n"
+                         (propertize "  " 'display
+                           `(space :align-to 12)))
+               (propertize "  " 'display
+                           `(space :align-to
+                                   ,(+ (* lw 2)                ;digits
+                                       (/ lw nhexl-group-size) ;spaces
+                                       12 3)))))))              ;addr + borders
     (font-lock-append-text-property 0 (length s) prop 'default s)
     ;; If the first char of the text has a button (e.g. it's part of
     ;; a hyperlink), clicking in the hex part of the display might signal
@@ -716,6 +735,16 @@ Return the corresponding nibble, if applicable."
              (ol (make-overlay from next))
              (s (nhexl--make-line from next zero nhexl--point))
              (c (char-before next)))
+        (when nhexl-separate-line
+          (dotimes (i (- (min (point-max) next) from 1))
+            (let ((ol (make-overlay (+ from i) (+ from i 1))))
+              (overlay-put ol 'nhexl t)
+              (overlay-put ol 'after-string
+                           (propertize " " 'display
+                                       `(space :align-to
+                                         ,(+ (* (1+ i) 2)                ;digits
+                                             (/ (1+ i) nhexl-group-size) ;spaces
+                                             12)))))))
         (unless (or nhexl--put-LF-in-string (>= next (point-max)))
           ;; Display tables aren't applied to strings in `display' properties,
           ;; so we have to mimick it by hand.
@@ -766,9 +795,9 @@ Return the corresponding nibble, if applicable."
               (setq i (logand i #xf))
               (push (if (< i 10) (+ i ?0) (+ i -10 ?a)) tmp))
             (apply #'string (nreverse tmp))))
-         (pos (mod (- (point) zero) lw))
-         (i -1))
-    (put-text-property pos (1+ pos) 'face 'highlight text)
+         (pos (1+ (mod (- (point) zero) lw)))
+         (i 0))
+    (put-text-property (1- pos) pos 'face 'highlight text)
     (concat
      (eval-when-compile (propertize " " 'display '(space :align-to 0)))
      "Address:"
@@ -776,7 +805,7 @@ Return the corresponding nibble, if applicable."
      (mapconcat (lambda (c)
                   (setq i (1+ i))
                   (let ((s (string c c)))
-                    (when (eq i pos)
+                    (when (eql i pos)
                       (if nhexl-nibble-edit-mode
                           (let ((nib (min (nhexl--nibble (point))
                                           (1- (length s)))))
@@ -786,18 +815,24 @@ Return the corresponding nibble, if applicable."
                         (put-text-property 0 (length s)
                                            'face 'highlight
                                            s)))
-                    (if (zerop (mod i 2)) s
+                    (if (not (zerop (mod i nhexl-group-size)))
+                        s
                       (concat
                        s (propertize " " 'display
                                      `(space :align-to
-                                             ,(+ (/ (* i 5) 2) 12 3)))))))
+                                             ,(+ (* i 2)                ;digits
+                                                 (/ i nhexl-group-size) ;spaces
+                                                 12)))))))              ;addr
                 text
                 "")
-     (propertize "  " 'display
-                 `(space :align-to
-                         ,(+ (/ (* lw 5) 2)
-                             12 3)))
-     text)))
+     (unless nhexl-separate-line
+       (concat
+        (propertize "  " 'display
+                    `(space :align-to
+                            ,(+ (* lw 2)                ;digits
+                                (/ lw nhexl-group-size) ;spaces
+                                12 3)))                 ;addr + border
+        text)))))
   
 
 (defun nhexl--post-command ()
@@ -971,11 +1006,14 @@ Return the corresponding nibble, if applicable."
 (when (fboundp 'add-variable-watcher)
   (add-variable-watcher 'nhexl-line-width #'nhexl--line-width-watcher))
 
-(defun nhexl--window-size-change (frame)
+(defun nhexl--window-size-change (frame-or-window)
   (when (eq t (default-value 'nhexl-line-width))
-    (dolist (win (window-list frame 'nomini))
-      (when (buffer-local-value 'nhexl-mode (window-buffer win))
-        (with-selected-window win (nhexl--adjust-to-width))))))
+    (if (windowp frame-or-window)         ;Emacs≥27
+        (with-selected-window frame-or-window
+          (nhexl--adjust-to-width))
+      (dolist (win (window-list frame-or-window 'nomini))
+        (when (buffer-local-value 'nhexl-mode (window-buffer win))
+          (with-selected-window win (nhexl--adjust-to-width)))))))
 
 (defun nhexl--window-config-change ()
   ;; Doing it only from `window-size-change-functions' is not sufficient
@@ -994,7 +1032,7 @@ Return the corresponding nibble, if applicable."
                             (+ 9        ;Address
                                3        ;Spaces between address and hex area
                                4)))     ;Spaces between hex area and ascii area
-                       3.5))            ;Columns per byte
+                       (+ 3 (/ 1.0 nhexl-group-size)))) ;Columns per byte
              (pow2bytes (lsh 1 (truncate (log bytes 2)))))
         (when (> (/ bytes pow2bytes) 1.5)
           ;; Add 1½ steps: 4, *6*, 8, *12*, 16, *24*, 32, *48*, 64
