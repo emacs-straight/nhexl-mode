@@ -1,10 +1,10 @@
 ;;; nhexl-mode.el --- Minor mode to edit files via hex-dump format  -*- lexical-binding: t -*-
 
-;; Copyright (C) 2010-2019  Free Software Foundation, Inc.
+;; Copyright (C) 2010-2020  Free Software Foundation, Inc.
 
 ;; Author: Stefan Monnier <monnier@iro.umontreal.ca>
 ;; Keywords: data
-;; Version: 1.4
+;; Version: 1.5
 ;; Package-Requires: ((emacs "24.4") (cl-lib "0.5"))
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -357,6 +357,9 @@ existing text, if needed with `nhexl-overwrite-clear-byte'."
     ;; `previous-line' for this case, tho it is pretty pathological for them.
     (define-key map [remap next-line] #'nhexl-next-line)
     (define-key map [remap previous-line] #'nhexl-previous-line)
+    (define-key map [remap move-end-of-line] #'nhexl-move-end-of-line)
+    (define-key map [remap move-beginning-of-line]
+      #'nhexl-move-beginning-of-line)
     ;; Just as for line movement, scrolling movement could/should work as-is
     ;; but benefit from an ad-hoc implementation.
     (define-key map [remap scroll-up-command] #'nhexl-scroll-up)
@@ -459,6 +462,20 @@ existing text, if needed with `nhexl-overwrite-clear-byte'."
     (let ((nib (nhexl--nibble)))
       (backward-char (* arg (nhexl--line-width)))
       (nhexl--nibble-set nib))))
+
+(defun nhexl-move-beginning-of-line (&optional arg)
+  "Move to beginning of the hex line that lies ARG - 1 hex lines ahead."
+  (interactive "p")
+  (unless arg (setq arg 1))
+  (nhexl-next-line (- arg 1))
+  (backward-char (mod (- (point) 1) nhexl-line-width)))
+
+(defun nhexl-move-end-of-line (&optional arg)
+  "Move to end of the hex line that lies ARG - 1 hex lines ahead."
+  (interactive "p")
+  (unless arg (setq arg 1))
+  (nhexl-next-line (- arg 1))
+  (forward-char (- nhexl-line-width 1 (mod (- (point) 1) nhexl-line-width))))
 
 (defun nhexl-scroll-down (&optional arg)
   "Scroll text of selected window down ARG lines; or near full screen if no ARG."
