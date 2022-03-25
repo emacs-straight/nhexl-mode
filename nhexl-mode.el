@@ -1,6 +1,6 @@
 ;;; nhexl-mode.el --- Minor mode to edit files via hex-dump format  -*- lexical-binding: t -*-
 
-;; Copyright (C) 2010-2020  Free Software Foundation, Inc.
+;; Copyright (C) 2010-2022  Free Software Foundation, Inc.
 
 ;; Author: Stefan Monnier <monnier@iro.umontreal.ca>
 ;; Keywords: data
@@ -378,7 +378,7 @@ existing text, if needed with `nhexl-overwrite-clear-byte'."
 
 ;;;###autoload
 (define-minor-mode nhexl-mode
-  "Minor mode to edit files via hex-dump format"
+  "Minor mode to edit files via hex-dump format."
   :lighter (" NHexl" (nhexl-nibble-edit-mode "/ne"))
   (dolist (varl (prog1 nhexl--saved-vars
                   (kill-local-variable 'nhexl--saved-vars)))
@@ -477,6 +477,22 @@ existing text, if needed with `nhexl-overwrite-clear-byte'."
   (nhexl-next-line (- arg 1))
   (forward-char (- nhexl-line-width 1 (mod (- (point) 1) nhexl-line-width))))
 
+(defun nhexl--window-text-height ()
+  ;; Find the actual text height, since some faces may cause the NHexl
+  ;; lines to be taller than normal.
+  (let ((pos (window-end nil t))
+        (height nil))
+    ;; `posn-at-point' at (1- (window-end)) sometimes returns
+    ;; a weird position such as on the `mode-line', so I use a loop to
+    ;; try and find a position that gives a sane return value.
+    (while (progn
+             (setq pos (- pos (nhexl--line-width)))
+             (and (not height) (> pos (window-start))))
+      (let ((posn (posn-at-point pos)))
+        (when (integerp (nth 1 posn))
+          (setq height (cdr (posn-actual-col-row posn))))))
+    (or height (window-text-height))))
+
 (defun nhexl-scroll-down (&optional arg)
   "Scroll text of selected window down ARG lines; or near full screen if no ARG."
   (interactive "P")
@@ -484,7 +500,8 @@ existing text, if needed with `nhexl-overwrite-clear-byte'."
     ;; Magic extra 2 lines: 1 line to account for the header-line, and a second
     ;; to account for the extra empty line that somehow ends up being there
     ;; pretty much all the time right below the header-line :-(
-    (setq arg (max 1 (- (window-text-height) next-screen-context-lines 2))))
+    (setq arg (max 1 (- (nhexl--window-text-height)
+                        next-screen-context-lines 2))))
   (cond
    ((< arg 0) (nhexl-scroll-up (- arg)))
    ((eq arg '-) (nhexl-scroll-up nil))
@@ -506,7 +523,8 @@ existing text, if needed with `nhexl-overwrite-clear-byte'."
     ;; Magic extra 2 lines: 1 line to account for the header-line, and a second
     ;; to account for the extra empty line that somehow ends up being there
     ;; pretty much all the time right below the header-line :-(
-    (setq arg (max 1 (- (window-text-height) next-screen-context-lines 2))))
+    (setq arg (max 1 (- (nhexl--window-text-height)
+                        next-screen-context-lines 2))))
   (cond
    ((< arg 0) (nhexl-scroll-down (- arg)))
    ((eq arg '-) (nhexl-scroll-down nil))
@@ -1062,10 +1080,10 @@ Return the corresponding nibble, if applicable."
 (defvar nhexl-universal-argument-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map universal-argument-map)
-    (define-key map [?\C-u] 'universal-argument-more)
-    (define-key map [remap digit-argument] 'nhexl-digit-argument)
+    (define-key map [?\C-u] #'universal-argument-more)
+    (define-key map [remap digit-argument] #'nhexl-digit-argument)
     (dolist (k '("a" "b" "c" "d" "e" "f"))
-      (define-key map k 'nhexl-digit-argument))
+      (define-key map k #'nhexl-digit-argument))
     map)
   "Keymap used while processing nhexl-mode's \\[universal-argument].")
 
