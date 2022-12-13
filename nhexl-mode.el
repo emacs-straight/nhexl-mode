@@ -782,7 +782,7 @@ Return the corresponding nibble, if applicable."
                                              12)))))))
         (unless (or nhexl--put-LF-in-string (>= next (point-max)))
           ;; Display tables aren't applied to strings in `display' properties,
-          ;; so we have to mimick it by hand.
+          ;; so we have to mimic it by hand.
           (let ((cdisplay (aref nhexl--display-table
                                 (if enable-multibyte-characters c
                                   (unibyte-char-to-multibyte c)))))
