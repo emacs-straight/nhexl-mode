@@ -68,6 +68,12 @@
 ;; - Always reload the file with find-file-literally instead
 ;;   of editing the multibyte representation?
 
+;;; News:
+
+;; Since v1.5:
+;; - New var `nhexl-nibble-copy-hex' to allow kill operations to copy
+;;   the hex form when in nibble mode.
+
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
@@ -136,8 +142,13 @@ Groups are separated by spaces."
 
 ;; FIXME: Region highlighting in this minor mode should highlight the hex area
 ;;   rather than only the ascii area!
-;; FIXME: Kill&yank in this minor mode should work on the hex representation
+;; FIXME: Yank in this minor mode should work on the hex representation
 ;;   of the buffer's content (and should obey overwrite-mode)!
+
+(defcustom nhexl-nibble-copy-hex nil    ;Probably more annoying than anything!
+  "if non-nil, copy/kill text's hexadecimal representation.
+Only takes effect when in `nhexl-nibble-edit-mode'."
+  :type 'boolean)
 
 (defvar nhexl-nibble-edit-mode-map
   (let ((map (make-sparse-keymap)))
@@ -155,9 +166,17 @@ Groups are separated by spaces."
 (define-minor-mode nhexl-nibble-edit-mode
   "Minor mode to edit the hex nibbles in `nhexl-mode'."
   :global nil
-  (if nhexl-nibble-edit-mode
-      (setq-local cursor-type 'hbar)
-    (kill-local-variable 'cursor-type))
+  (cond
+   (nhexl-nibble-edit-mode
+    (add-function :filter-return (local 'filter-buffer-substring-function)
+                  #'nhexl--convert-to-hex)
+    (setq-local nhexl-isearch-hex-bytes t)
+    (setq-local cursor-type 'hbar))
+   (t
+    (remove-function (local 'filter-buffer-substring-function)
+                     #'nhexl--convert-to-hex)
+    (kill-local-variable 'cursor-type)
+    (kill-local-variable 'nhexl-isearch-hex-bytes)))
   (nhexl--refresh-cursor))
 
 (defvar-local nhexl--nibbles nil
@@ -241,6 +260,10 @@ and TICKS is the `buffer-chars-modified-tick' for which this was valid.")
     (if (= max nib) nil
       (backward-char 1)
       (nhexl--nibble-set (1+ nib)))))
+
+(defun nhexl--convert-to-hex (string)
+  (when nhexl-nibble-edit-mode
+    (mapconcat (lambda (c) (format "%02x" c)) string "")))
 
 ;;;; No insertion/deletion minor mode
 
