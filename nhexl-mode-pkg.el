@@ -1,2 +1,0 @@
-;; Generated package description from nhexl-mode.el  -*- no-byte-compile: t -*-
-(define-package "nhexl-mode" "1.5.0.20221215.152407" "Minor mode to edit files via hex-dump format" '((emacs "24.4")) :commit "70d3c545857f59e892fba9dbefdca4fa25b9af9a" :url "https://elpa.gnu.org/packages/nhexl-mode.html" :authors '(("Stefan Monnier" . "monnier@iro.umontreal.ca")) :maintainer '("Stefan Monnier" . "monnier@iro.umontreal.ca") :keywords '("data"))
