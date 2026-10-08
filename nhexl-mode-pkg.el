@@ -1,2 +1,2 @@
-;; Generated package description from nhexl-mode.el  -*- no-byte-compile: t -*-
-(define-package "nhexl-mode" "1.5.0.20221215.152407" "Minor mode to edit files via hex-dump format" '((emacs "24.4")) :commit "70d3c545857f59e892fba9dbefdca4fa25b9af9a" :url "https://elpa.gnu.org/packages/nhexl-mode.html" :authors '(("Stefan Monnier" . "monnier@iro.umontreal.ca")) :maintainer '("Stefan Monnier" . "monnier@iro.umontreal.ca") :keywords '("data"))
+;; Generated package description from nhexl-mode.el  -*- no-byte-compile: t; lexical-binding:t -*-
+(define-package "nhexl-mode" "1.6.0.20261006.0" "Minor mode to edit files via hex-dump format" '((emacs "24.4")) :commit "da0c2d94178685f6a7b8771123cce7700d4707bc" :url "https://elpa.gnu.org/packages/nhexl-mode.html" :authors '(("Stefan Monnier" . "monnier@iro.umontreal.ca")) :maintainer '("Stefan Monnier" . "monnier@iro.umontreal.ca") :keywords '("data"))

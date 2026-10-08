@@ -1,0 +1,4 @@
+Since v1.5:
+- New var `nhexl-nibble-copy-hex' to allow kill operations to copy
+  the hex form when in nibble mode.
+- Support for `hl-line-mode'.

@@ -1,10 +1,10 @@
 ;;; nhexl-mode.el --- Minor mode to edit files via hex-dump format  -*- lexical-binding: t -*-
 
-;; Copyright (C) 2010-2022  Free Software Foundation, Inc.
+;; Copyright (C) 2010-2026  Free Software Foundation, Inc.
 
 ;; Author: Stefan Monnier <monnier@iro.umontreal.ca>
 ;; Keywords: data
-;; Version: 1.5
+;; Version: 1.6
 ;; Package-Requires: ((emacs "24.4"))
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -73,6 +73,7 @@
 ;; Since v1.5:
 ;; - New var `nhexl-nibble-copy-hex' to allow kill operations to copy
 ;;   the hex form when in nibble mode.
+;; - Support for `hl-line-mode'.
 
 ;;; Code:
 
@@ -410,13 +411,20 @@ existing text, if needed with `nhexl-overwrite-clear-byte'."
   (if (not nhexl-mode)
       (progn
         (jit-lock-unregister #'nhexl--jit)
-        (remove-hook 'after-change-functions #'nhexl--change-function 'local)
         (remove-hook 'post-command-hook #'nhexl--post-command 'local)
+        (remove-hook 'after-change-functions #'nhexl--change-function 'local)
+        (if (eq (bound-and-true-p hl-line-range-function)
+                #'nhexl--hl-line-range)
+            (kill-local-variable 'hl-line-range-function)
+          (remove-function (local 'hl-line-range-function)
+                           #'nhexl--hl-line-range))
         (if (>= emacs-major-version 27)
-            (remove-hook 'window-size-change-functions #'nhexl--window-size-change t)
+            (remove-hook 'window-size-change-functions
+                         #'nhexl--window-size-change t)
           (remove-hook 'window-configuration-change-hook
                        #'nhexl--window-config-change t)
-          (remove-hook 'window-size-change-functions #'nhexl--window-size-change))
+          (remove-hook 'window-size-change-functions
+                       #'nhexl--window-size-change))
         (remove-function (local 'isearch-search-fun-function)
                          #'nhexl--isearch-search-fun)
         ;; FIXME: This conflicts with any other use of `display'.
@@ -454,8 +462,13 @@ existing text, if needed with `nhexl-overwrite-clear-byte'."
     (add-hook 'change-major-mode-hook (lambda () (nhexl-mode -1)) nil 'local)
     (add-hook 'post-command-hook #'nhexl--post-command nil 'local)
     (add-hook 'after-change-functions #'nhexl--change-function nil 'local)
+    (if (bound-and-true-p hl-line-range-function)
+        (add-function :override (local 'hl-line-range-function)
+                      #'nhexl--hl-line-range)
+      (setq-local hl-line-range-function #'nhexl--hl-line-range))
     (if (>= emacs-major-version 27)
-        (add-hook 'window-size-change-functions #'nhexl--window-size-change nil t)
+        (add-hook 'window-size-change-functions
+                  #'nhexl--window-size-change nil t)
       (add-hook 'window-configuration-change-hook
                 #'nhexl--window-config-change nil 'local)
       (add-hook 'window-size-change-functions #'nhexl--window-size-change))
@@ -562,11 +575,21 @@ existing text, if needed with `nhexl-overwrite-clear-byte'."
         (nhexl-next-line arg)
         (set-window-start nil (min (point-max) nws)))))))
 
-;; If we put the LFs in the before-string, we get a spurious empty
-;; line at the top of the window (bug#31276), so we put the LFs
-;; via a `display' property by default, but it's a bit complicated.
+(defun nhexl--hl-line-range ()
+  (let* ((zero (save-restriction (widen) (point-min)))
+	 (lw (nhexl--line-width))
+	 (from (max (point-min)
+		    (+ zero (* (truncate (- (point) zero) lw) lw))))
+	 (to (min (point-max)
+		  (+ zero (* (ceiling (- (1+ (point)) zero) lw) lw)))))
+    (cons from to)))
+
 (eval-and-compile
-  (defvar nhexl--put-LF-in-string nil))
+  (defvar nhexl--put-LF-in-string nil
+    "If non-nil, put nhexl's visual-only line breaks in before-strings.
+If we put the LFs in the before-string, we get a spurious empty
+line at the top of the window (bug#31276), so we put the LFs
+via a `display' property by default, but it's a bit complicated."))
 
 (defun nhexl--posn-hexadjust (posn)
   "Adjust POSN when clicking on the hex area.
@@ -781,13 +804,12 @@ Return the corresponding nibble, if applicable."
     (while (< from to)
 
       (cl-decf nhexl--overlay-counter)
-      (when (and (= nhexl--overlay-counter 0)
-                 ;; If the user enabled jit-lock-stealth fontification, then
-                 ;; removing overlays is just a waste since
-                 ;; jit-lock-stealth will restore them anyway.
-                 (not jit-lock-stealth-time))
-        ;; (run-with-idle-timer 0 nil #'nhexl--flush-overlays (current-buffer))
-        )
+      ;; (when (and (= nhexl--overlay-counter 0)
+      ;;            ;; If the user enabled jit-lock-stealth fontification, then
+      ;;            ;; removing overlays is just a waste since
+      ;;            ;; jit-lock-stealth will restore them anyway.
+      ;;            (not jit-lock-stealth-time))
+      ;;   (run-with-idle-timer 0 nil #'nhexl--flush-overlays (current-buffer)))
       
       (let* ((next (+ from lw))
              (ol (make-overlay from next))
@@ -998,7 +1020,7 @@ Return the corresponding nibble, if applicable."
          ;; whereas if `string' says just "7a", then we look for nearest
          ;; address of the form "XXX7a", or "XXX7aX", or "XXX7aXX", ...
          (anchored (eq ?: (aref string (1- (length string)))))
-         (mod (lsh 1 (* 4 (- (length string) (if anchored 1 0)))))
+         (mod (ash 1 (* 4 (- (length string) (if anchored 1 0)))))
          (base (save-restriction (widen) (point-min)))
          (bestnext nil)
          (maxaddr (- (max (point) bound) base)))
@@ -1091,7 +1113,7 @@ Return the corresponding nibble, if applicable."
                                3        ;Spaces between address and hex area
                                4)))     ;Spaces between hex area and ascii area
                        (+ 3 (/ 1.0 nhexl-group-size)))) ;Columns per byte
-             (pow2bytes (lsh 1 (truncate (log bytes 2)))))
+             (pow2bytes (ash 1 (truncate (log bytes 2)))))
         (when (> (/ bytes pow2bytes) 1.5)
           ;; Add 1½ steps: 4, *6*, 8, *12*, 16, *24*, 32, *48*, 64
           (setq pow2bytes (+ pow2bytes (/ pow2bytes 2))))
