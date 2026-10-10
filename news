@@ -1,3 +1,9 @@
+Since v1.6:
+
+- New var `nhexl-nibble-edit-on-click' to auto-activate
+  `nhexl-nibble-edit-mode' after mouse clicks in the hex area.
+- Actually obey `nhexl-nibble-copy-hex'.
+
 Since v1.5:
 - New var `nhexl-nibble-copy-hex' to allow kill operations to copy
   the hex form when in nibble mode.
